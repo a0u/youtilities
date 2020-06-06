@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+
+import os
+import sys
+import json
+
+sys.path.insert(1, os.path.join(os.path.dirname(__file__), '..', 'lib'))
+import youtube
+
+def ls(youtube, args):
+    # <https://developers.google.com/youtube/v3/live/docs/liveStreams/list>
+    req = youtube.streams.list(part='id,snippet,cdn,status', mine=True)
+    resp = req.execute()
+    items = resp.get('items')
+    if items:
+        print(json.dumps(items, indent=2))
+
+def add(youtube, args):
+    # <https://developers.google.com/youtube/v3/live/docs/liveStreams/insert>
+    req = youtube.streams.insert(
+        part='snippet,cdn,contentDetails',
+        body={
+            'snippet': {
+                'title': args.title,
+            },
+            'cdn': {
+                'ingestionType': args.type,
+                'frameRate': args.framerate,
+                'resolution': args.resolution,
+            },
+            'contentDetails': {
+                'isReusable': True,
+            },
+        })
+    resp = req.execute()
+    print(resp['cdn']['ingestionInfo']['streamName'])
+
+def rm(youtube, args):
+    if args.all:
+        # <https://developers.google.com/youtube/v3/live/docs/liveStreams/list>
+        req = youtube.streams.list(part='id', mine=True)
+        resp = req.execute()
+        for stream in resp['items']:
+            # <https://developers.google.com/youtube/v3/live/docs/liveStreams/delete>
+            youtube.streams.delete(id=stream['id']).execute()
+    else:
+        youtube.streams.delete(id=youtube.stream_id(args.name)).execute()
+
+
+parser = youtube.ArgumentParser(description='YouTube live stream controller')
+subparsers = parser.add_subparsers(dest='cmd', metavar='cmd', title='commands')
+subparsers.required = True
+
+parser_ls = subparsers.add_parser('ls', help='List video streams')
+parser_ls.set_defaults(func=ls)
+
+parser_add = subparsers.add_parser('add', help='Create video stream')
+parser_add.add_argument('-t', '--type', default='rtmp',
+    choices=['rtmp', 'dash', 'webrtc', 'hls'],
+    type=str, metavar='TYPE', help='cdn.ingestionType')
+parser_add.add_argument('-r', '--framerate', default='variable',
+    choices=['30fps', '60fps', 'variable'],
+    type=str, metavar='RATE', help='cdn.frameRate')
+parser_add.add_argument('-s', '--resolution', default='variable',
+    choices=['240p', '360p', '480p', '720p', '1080p', '1440p', '2160p', 'variable'],
+    type=str, metavar='SIZE', help='cdn.resolution')
+parser_add.add_argument('title', type=str, help='snippet.title')
+parser_add.set_defaults(func=add)
+
+parser_rm = subparsers.add_parser('rm', help='Delete video stream')
+group = parser_rm.add_mutually_exclusive_group(required=True)
+group.add_argument('-a', '--all', action='store_true')
+group.add_argument('name', nargs='?', type=str, help='cdn.ingestionInfo.streamName')
+parser_rm.set_defaults(func=rm)
+
+args = parser.parse_args()
+
+youtube = youtube.Client(args.client_secret, args.token)
+args.func(youtube, args)
+

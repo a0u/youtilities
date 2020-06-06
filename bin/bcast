@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+
+import os
+import sys
+import json
+import datetime
+
+sys.path.insert(1, os.path.join(os.path.dirname(__file__), '..', 'lib'))
+import youtube
+
+def ls(youtube, args):
+    # <https://developers.google.com/youtube/v3/live/docs/liveBroadcasts/list>
+    req_args = { 'mine': True } if args.all else { 'broadcastStatus': 'active' }
+    req = youtube.broadcasts.list(part='id,snippet,contentDetails,status', **req_args)
+    resp = req.execute()
+    items = resp.get('items')
+    if items:
+        print(json.dumps(items, indent=2))
+
+def start(youtube, args):
+    # <https://developers.google.com/youtube/v3/live/life-of-a-broadcast>
+    sid = youtube.stream_id(args.stream)
+
+    # <https://developers.google.com/youtube/v3/live/docs/liveBroadcasts/insert>
+    time = args.time.astimezone(tz=datetime.timezone.utc)
+    req = youtube.broadcasts.insert(
+        part='snippet,status,contentDetails',
+        body={
+            'snippet': {
+                'title': args.title,
+                'description': args.desc,
+                'scheduledStartTime': time.isoformat(timespec='seconds'),
+            },
+            'status': {
+                'privacyStatus': args.privacy,
+                'selfDeclaredMadeForKids': False,
+            },
+            'contentDetails': {
+                'enableDvr': True,
+                'recordFromStart': True,
+                'monitorStream': {
+                    'enableMonitorStream': args.testing or False,
+                },
+            },
+        })
+    resp = req.execute()
+    bid = resp['id']
+
+    # <https://developers.google.com/youtube/v3/live/docs/liveBroadcasts/bind>
+    req = youtube.broadcasts.bind(id=bid, part='snippet', streamId=sid)
+    resp = req.execute()
+
+    # <https://developers.google.com/youtube/v3/live/docs/liveBroadcasts/transition>
+    req = youtube.broadcasts.transition(id=bid, part='snippet,status',
+        broadcastStatus=('testing' if args.testing else 'live'))
+    resp = req.execute()
+
+def stop(youtube, args):
+    req = youtube.broadcasts.list(part='id', broadcastStatus='active')
+    resp = req.execute()
+    for bcast in resp['items']:
+        youtube.broadcasts.transition(
+            id=bcast['id'],
+            part='snippet,status',
+            broadcastStatus='complete').execute()
+
+
+parser = youtube.ArgumentParser(description='YouTube live broadcast controller')
+subparsers = parser.add_subparsers(dest='cmd', metavar='cmd', title='commands')
+subparsers.required = True
+
+parser_ls = subparsers.add_parser('ls', help='List YouTube broadcasts')
+parser_ls.add_argument('-a', '--all', action='store_true')
+parser_ls.set_defaults(func=ls)
+
+parser_start = subparsers.add_parser('start', help='Start a YouTube broadcast')
+parser_start.add_argument('-t', '--time',
+    default=datetime.datetime.now(),
+    type=datetime.datetime.fromisoformat, metavar='ISO',
+    help='snippet.scheduledStartTime')
+parser_start.add_argument('-d', '--desc', default='',
+    type=str, metavar='TEXT', help='snippet.description')
+parser_start.add_argument('-p', '--privacy', default='private',
+    choices=['private', 'public', 'unlisted'],
+    type=str, metavar='STAT', help='status.privacyStatus')
+parser_start.add_argument('--testing', action='store_true',
+    help='contentDetails.monitorStream.enableMonitorStream')
+parser_start.add_argument('title', type=str, help='snippet.title')
+parser_start.add_argument('stream', type=str, help='cdn.ingestionInfo.streamName')
+parser_start.set_defaults(func=start)
+
+parser_stop= subparsers.add_parser('stop', help='Stop YouTube broadcasts')
+parser_stop.set_defaults(func=stop)
+
+args = parser.parse_args()
+
+youtube = youtube.Client(args.client_secret, args.token)
+args.func(youtube, args)
+
